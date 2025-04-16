@@ -40,7 +40,7 @@ Ld = design(dd,'equiripple');
 %%
 for SN = 1:109
 
-    %% Run 1 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %% Run 1
     subdirectory1 = sprintf('S%03d', SN);
     subdirectory2 = sprintf('S%03dR04.edf', SN);
     path = fullfile(directory, subdirectory1, subdirectory2);
