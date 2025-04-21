@@ -1,100 +1,100 @@
+
 % Script Name: power_plv_fusion_RF.m
 % Author: Fatemeh Delavari (Atena)
-% Date: 2024-03-03
+% Date: 2024-03-04
 % Version: 1.0
 % Description: This script performs k-fold cross-validated classification of 
-% right and left hand motor imagery using a combination of power and PLV features.
-% Top-k feature selection is performed using Random Forest importance scores.
+% right and left-hand motor imagery using fused power and PLV features.
+% Random Forest is used for both classification and top-k feature selection.
 
 %% Initialization
 clear; clc;
 tic;
 
 %% Parameters
-nepoch = 72;
-nch = 22;
-ntr = 72;
-num_samples = 2 * ntr;       % Total number of samples (Right + Left)
-n = 5;                       % Number of folds for cross-validation
-numTrees = 100;              % Number of trees in Random Forest
+ntr = 72;                        % Number of trials per condition
+nch = 22;                        % Number of EEG channels
+num_samples = 2 * ntr;           % Total samples (Right + Left)
+n = 5;                           % Number of CV folds
+numTrees = 100;                 % Number of trees in Random Forest
 
-cv = cvpartition(num_samples, 'KFold', n);  % Create partitioning vector
+cv = cvpartition(num_samples, 'KFold', n);  % Stratified cross-validation
 
 %% Load Data
-load("powerLR1.mat", "RP_L1", "RP_R1");     % Power features
-load("PLV1.mat", "plvL1", "plvR1");         % PLV features
-load("RFp1.mat");                           % Optional: pre-saved RF model
+load("powerLR1.mat", "RP_L1", "RP_R1");       % Power features
+load("PLV1.mat", "plvL1", "plvR1");           % PLV features
 
-%% Feature Fusion, Normalization, and Classification
-for num_feat = 1:20                         % Vary number of selected features
-    for d = 1:9                             % Loop over 9 subjects
+%% Classification and Feature Selection
+for num_feat = 2:20                            % Test top-k features from 1 to 22
+    for d = 1:9                                % Loop over 9 subjects
 
-        % Extract power and PLV features
-        XR1 = squeeze(RP_R1(d, :, :));      % Power - Right hand
-        XL1 = squeeze(RP_L1(d, :, :));      % Power - Left hand
-        XR2 = reshape(plvR1(d, :, :, :), ntr, []);  % PLV - Right hand
-        XL2 = reshape(plvL1(d, :, :, :), ntr, []);  % PLV - Left hand
+        % Extract and reshape power features
+        XR1 = squeeze(RP_R1(d, :, :));         % Power - Right hand
+        XL1 = squeeze(RP_L1(d, :, :));         % Power - Left hand
 
-        % Concatenate data and labels
-        Xdata1 = [XR1; XL1];                % Power
-        Xdata2 = [XR2; XL2];                % PLV
-        Ydata = [ones(ntr, 1); 2 * ones(ntr, 1)];  % Labels
+        % Extract and reshape PLV features
+        XR2 = reshape(plvR1(d, :, :, :), ntr, []);
+        XL2 = reshape(plvL1(d, :, :, :), ntr, []);
 
-        % Normalize feature sets per trial
-        Xdata1 = (Xdata1 - min(Xdata1, [], 2)) ./ (max(Xdata1, [], 2) - min(Xdata1, [], 2));
-        Xdata2 = (Xdata2 - min(Xdata2, [], 2)) ./ (max(Xdata2, [], 2) - min(Xdata2, [], 2));
+        % Combine features and labels
+        Xdata1 = [XR1; XL1];                   % Power
+        Xdata2 = [XR2; XL2];                   % PLV
+        Ydata = [ones(ntr, 1); 2 * ones(ntr, 1)];  % 1 = Right, 2 = Left
 
-        % Concatenate power and PLV features
+        % Normalize each trial independently
+        Xdata1 = normalize(Xdata1, 2);
+        Xdata2 = normalize(Xdata2, 2);
+
+        % Fuse features
         Xdata12 = [Xdata1, Xdata2];
 
-        for i = 1:n  % Cross-validation folds
-
+        for i = 1:n  % Cross-validation loop
             train_idx = cv.training(i);
             test_idx = cv.test(i);
 
-            % Initial model to determine feature importance
-            rfModel_temp = TreeBagger(numTrees, Xdata12, Ydata, ...
-                                      'Method', 'classification', ...
-                                      'OOBPredictorImportance', 'on');
-            feature_importance = rfModel_temp.OOBPermutedVarDeltaError;
+            % Train a temporary RF to get feature importance
+            rf_temp = TreeBagger(numTrees, Xdata12, Ydata, ...
+                                 'Method', 'classification', ...
+                                 'OOBPredictorImportance', 'on');
+            feature_importance = rf_temp.OOBPermutedVarDeltaError;
             [~, sorted_idx] = sort(feature_importance, 'descend');
-
             top_features = sorted_idx(1:num_feat);
 
-            % Train/test sets with selected features
-            train_data12 = Xdata12(train_idx, top_features);
-            test_data12 = Xdata12(test_idx, top_features);
-            train_label12 = Ydata(train_idx);
-            test_label12 = Ydata(test_idx);
+            % Select top-k features
+            train_data = Xdata12(train_idx, top_features);
+            test_data = Xdata12(test_idx, top_features);
+            train_label = Ydata(train_idx);
+            test_label = Ydata(test_idx);
 
-            % Final model training
-            randomForest = TreeBagger(numTrees, train_data12, train_label12, ...
-                                      'Method', 'classification', ...
-                                      'OOBPredictorImportance', 'on');
-            [predictedLabels, ~] = predict(randomForest, test_data12);
+            % Train final RF classifier
+            rf_final = TreeBagger(numTrees, train_data, train_label, ...
+                                  'Method', 'classification', ...
+                                  'OOBPredictorImportance', 'on');
+            [predictedLabels, ~] = predict(rf_final, test_data);
             Y_pred = str2double(predictedLabels);
 
-            % Store accuracy for subject d, feature count, fold i
-            acCVf(d, num_feat, i) = 100 * sum(Y_pred == test_label12) / length(test_label12);
+            % Compute accuracy
+            acCVf(d, num_feat, i) = 100 * sum(Y_pred == test_label) / length(test_label);
         end
     end
 end
 toc;
 
-%% Compute Mean Across Folds
-acCV2 = mean(acCVf, 3);  % Average over folds → shape: [subjects × num_feat]
+%% Compute Mean Accuracy Across Folds
+acCV = mean(acCVf, 3);                 % [subjects × features]
 
-%% Global Performance Metrics
-mAcc = mean(acCV2, "all");        % Mean accuracy across all
-sAcc = std(acCV2, [], "all");     % Std deviation across all
+%% Global Accuracy Stats
+mAcc = mean(acCV, 'all');              % Mean over all subjects and features
+sAcc = std(acCV, [], 'all');           % Std deviation over all
 
-%% Per-Subject Accuracy Statistics
-mAcc1 = mean(acCV3, 3);           % Mean per subject
-sAcc1 = std(acCV3, [], 3);        % Std per subject
+%% Per-Subject Accuracy Stats
+mAcc1 = mean(acCVf, 3);                 % Mean over folds → [subjects × features]
+sAcc1 = std(acCVf, [], 3);              % Std over folds → [subjects × features]
 
-%% Per-Feature Accuracy Statistics
-mAcc2 = mean(mAcc1, 1);           % Mean across subjects (per feature count)
-sAcc2 = std(mAcc1, [], 1);        % Std across subjects (per feature count)
+%% Per-Feature Accuracy Stats
+mAcc2 = mean(mAcc1, 1);                 % Mean across subjects (per feature count)
+sAcc2 = std(mAcc1, [], 1);              % Std across subjects (per feature count)
 
 %% Save Results
-save('powerplvfusionCV.mat', 'acCVf');
+save('powerplvfusionCV.mat', 'acCVf', 'acCV', ...
+     'mAcc', 'sAcc', 'mAcc1', 'sAcc1', 'mAcc2', 'sAcc2');
