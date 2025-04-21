@@ -26,7 +26,8 @@ load("PLV3.mat", "plvL3", "plvR3");         % PLV connectivity features
 load('pi3.mat');
 
 %% Classification Loop
-for num_feat = 2:10                          % Vary number of selected features
+for num_feat = 20
+    % 2:10                          % Vary number of selected features
     tic
     for d = 1:109                            % Loop through subjects
         if pi(d)<0.05
